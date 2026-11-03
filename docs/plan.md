@@ -37,7 +37,7 @@ Whisper と話者分離を使い、長時間の日本語音声を文字起こし
 | 認証 | Cloudflare Access |
 | GPU 処理 | Modal, Python |
 | 文字起こし | faster-whisper(large-v3) |
-| 話者分離 | pyannote |
+| 話者分離 | pyannote(speaker-diarization-community-1) |
 | 通知 | Discord Webhook |
 
 ### リポジトリ構成
@@ -116,7 +116,7 @@ R2 に保存する JSON を正本とする。他の形式はこの JSON から�
   "version": 1,
   "language": "ja",
   "duration_sec": 5400.0,
-  "model": { "transcription": "large-v3", "diarization": "pyannote" },
+  "model": { "transcription": "large-v3", "diarization": "pyannote/speaker-diarization-community-1" },
   "speakers": ["SPEAKER_00", "SPEAKER_01"],
   "segments": [
     {
@@ -130,7 +130,7 @@ R2 に保存する JSON を正本とする。他の形式はこの JSON から�
 }
 ```
 
-話者分離がオフの場合、`speakers` は空配列、`speaker` は `null` とする。
+話者分離がオフの場合、`speakers` は空配列、`speaker` と `model.diarization` は `null` とする。
 
 ### 形式ごとの出力
 
@@ -178,7 +178,7 @@ uploading ──> queued ──> processing ──> completed
 | 対象 | 期間 | 削除方法 |
 |---|---|---|
 | 音声(成功時) | 処理完了後すぐ | Worker が結果の存在を確認してから削除 |
-| 音声(失敗時・アップロード放棄時) | 約24時間 | R2 ライフサイクルルール(`audio/` を1日で削除) |
+| 音声(失敗時・アップロード放棄時) | 約24時間 | R2 ライフサイクルルール(`audio/` を1日で削除)。放棄されたジョブは Cron が1日1回 `failed`(`upload_abandoned`)にする |
 | 文字起こし結果 | 1年 | Cron が1日1回、`expires_at` を過ぎた D1 の行と R2 の結果を削除 |
 
 ### D1 スキーマ
@@ -189,7 +189,8 @@ CREATE TABLE jobs (
   filename      TEXT NOT NULL,
   size_bytes    INTEGER NOT NULL,
   status        TEXT NOT NULL,      -- uploading | queued | processing | completed | failed
-  attempt       INTEGER NOT NULL DEFAULT 0,
+  attempt       INTEGER NOT NULL DEFAULT 0,  -- 手動再実行でも戻さない(古いコールバックとの衝突を防ぐ)
+  retries_left  INTEGER NOT NULL DEFAULT 2,  -- 手動再実行で2に戻す
   options       TEXT NOT NULL,      -- JSON: 話者分離、話者数、用語リスト
   speaker_names TEXT NOT NULL DEFAULT '{}', -- JSON: { "SPEAKER_00": "田中" }
   error_code    TEXT,

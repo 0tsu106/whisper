@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.tsbuildinfo

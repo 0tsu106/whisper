@@ -1,0 +1,16 @@
+{
+  "name": "whisper-transcriber",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "worker"
+  ],
+  "scripts": {
+    "build": "npm run build -w frontend",
+    "dev:frontend": "npm run dev -w frontend",
+    "dev:worker": "npm run dev -w worker",
+    "typecheck": "npm run typecheck -w frontend && npm run typecheck -w worker",
+    "test": "npm run test -w frontend && npm run test -w worker",
+    "deploy": "npm run build && npm run deploy -w worker"
+  }
+}

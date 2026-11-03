@@ -1,0 +1,11 @@
+# GPU コンテナの直接の依存関係。更新手順は README を参照
+faster-whisper==1.2.1
+ctranslate2==4.8.5
+# av 17 以降は faster-whisper 1.2.1 の av.open(metadata_errors=...) と互換性がない可能性があり、19.0.2 で失敗を確認済み
+av==16.1.0
+pyannote.audio==4.0.7
+torch==2.8.0
+torchaudio==2.8.0
+torchcodec==0.7.0
+soundfile==0.13.1
+requests==2.34.2
