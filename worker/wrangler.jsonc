@@ -1,34 +1,49 @@
 {
-  "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "whisper-transcriber",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-10-01",
-  "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
-  "assets": {
-    "directory": "../frontend/dist",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/internal/*"]
-  },
-  "triggers": {
-    // 5分ごと: タイムアウト検知 / 毎日 03:00 JST: 期限切れデータの削除
-    "crons": ["*/5 * * * *", "0 18 * * *"]
-  },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "whisper",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
-      "migrations_dir": "migrations"
-    }
-  ],
-  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "whisper-files" }],
-  "vars": {
-    "APP_URL": "https://REPLACE_WITH_APP_HOST",
-    "R2_ACCOUNT_ID": "REPLACE_WITH_CLOUDFLARE_ACCOUNT_ID",
-    "R2_BUCKET_NAME": "whisper-files",
-    "MODAL_ENDPOINT_URL": "https://REPLACE_WITH_MODAL_ENDPOINT.modal.run",
-    "ACCESS_TEAM_DOMAIN": "REPLACE_WITH_TEAM.cloudflareaccess.com",
-    "ACCESS_AUD": "REPLACE_WITH_ACCESS_AUD"
-  }
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "whisper-transcriber",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"assets": {
+		"directory": "../frontend/dist",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": [
+			"/api/*",
+			"/internal/*"
+		]
+	},
+	"triggers": {
+		// 5分ごと: タイムアウト検知 / 毎日 03:00 JST: 期限切れデータの削除
+		"crons": [
+			"*/5 * * * *",
+			"0 18 * * *"
+		]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "whisper",
+			"database_id": "6d9e9453-1721-4fce-89a1-3ab450967bf1",
+			"migrations_dir": "migrations"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "BUCKET",
+			"bucket_name": "whisper-files"
+		}
+	],
+	"vars": {
+		"APP_URL": "https://whisper-transcriber.0tsu-notoin-google-sync.workers.dev",
+		"R2_ACCOUNT_ID": "f0c340b62d1ad8dc8626d50c57b44f49",
+		"R2_BUCKET_NAME": "whisper-files",
+		"MODAL_ENDPOINT_URL": "https://tsu106--whisper-transcriber-start.us-east.modal.run",
+		"ACCESS_TEAM_DOMAIN": "taratara.cloudflareaccess.com",
+		"ACCESS_AUD": "37493cc7cd480970eb30d75b35ce74bf25ad409e4dde352f61c8e87dbc9267bf"
+	}
 }
