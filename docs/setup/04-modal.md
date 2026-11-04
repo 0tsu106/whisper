@@ -154,6 +154,7 @@ Created a new secret 'whisper-secrets' with the keys 'HF_TOKEN', 'CALLBACK_SECRE
 | `No such file … requirements.txt` | 実行場所が違う | `modal` フォルダで実行しているか確認 |
 | イメージのビルドが失敗(パッケージの取得エラー) | 一時的なネットワークの問題 | 同じコマンドを再実行 |
 | `Billing / credits` 関連のエラー | クレジット不足/支払い設定 | ダッシュボードの **Settings → Billing** を確認 |
+| `Please add a payment method to use T4 GPU functions` | GPU 関数の利用にはカード登録が必須 | **Settings → Billing** でカードを登録し、**Budgets** で Spend limit(支払い上限)を小さく設定してから再デプロイ |
 
 ## ステップ 5: Proxy Auth Token を発行する
 
@@ -220,6 +221,17 @@ Worker を作る前に、Modal だけを試せます。短い音声(数分)を�
 ```sh
 .venv/bin/modal run app.py::main --input lecture.mp3 --no-diarization --terms "専門用語,固有名詞"
 ```
+
+精度を上げたいときのオプション(1つずつ変えて、結果を見比べてください):
+
+| オプション | 効果 |
+|---|---|
+| `--terms "心理ゼミ,Discord,人名…"` | 固有名詞・専門用語の認識を助ける。**人名や団体名は必ず入れる** |
+| `--normalize` | 音量を整える。片方の声が小さい通話録音で、取りこぼしが減る |
+| `--vad-threshold 0.35 --vad-min-silence-ms 600` | 小声やあいづちを拾いやすくする(既定は 0.5 / 2000) |
+| `--context` | 前の文を手がかりにする。固有名詞は安定するが、繰り返しが出ないか確認する |
+| `--model large-v2` など | Whisper のモデルを変える(`kotoba-tech/kotoba-whisper-v2.0-faster` も試せる) |
+| `--no-vad` | 音声の検出を切る(抜けが多いときの切り分け用) |
 
 初回はモデル(Whisper と話者分離モデル。合計で数GB)のダウンロードで時間がかかり、2回目以降はキャッシュ(Volume)が効いて速くなります。
 

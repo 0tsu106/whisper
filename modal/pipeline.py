@@ -26,6 +26,16 @@ CALLBACK_TIMEOUT_SEC = (10, 60)
 CALLBACK_MAX_ATTEMPTS = 6
 PROGRESS_INTERVAL_SEC = 300.0
 
+# 話者の割り当て: これより短く、かつ文字数が少ない連続区間は、隣の話者に吸収する
+MIN_RUN_SEC = 1.0
+MIN_RUN_CHARS = 6
+# 同じ話者の隣り合う区間を、この間隔以内かつこの文字数以内なら1つの発言にまとめる
+MAX_JOIN_GAP_SEC = 1.5
+MAX_UTTERANCE_CHARS = 200
+# 話者が不明な区間は別人の発言を混ぜるおそれがあるため、ほぼ連続し、文が終わっていないときだけまとめる
+MAX_UNLABELED_JOIN_GAP_SEC = 0.5
+SENTENCE_ENDINGS = ("。", "．", ".", "!", "！", "?", "？")
+
 logger = logging.getLogger("whisper")
 
 
@@ -67,13 +77,18 @@ def download_audio(url: str, dest: Path, max_bytes: int = MAX_AUDIO_BYTES) -> in
     return total
 
 
-def convert_to_wav(source: Path, dest: Path) -> None:
+NORMALIZE_FILTER = "highpass=f=80,dynaudnorm=f=150:g=15"
+
+
+def convert_to_wav(source: Path, dest: Path, normalize: bool = False) -> None:
     started = time.monotonic()
+    # normalize: 片方の声が小さい通話録音などで、小声の取りこぼしを減らす
+    filters = ["-af", NORMALIZE_FILTER] if normalize else []
     result = subprocess.run(
         [
             "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
             "-i", str(source),
-            "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+            "-vn", *filters, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
             str(dest),
         ],
         capture_output=True,
@@ -86,21 +101,42 @@ def convert_to_wav(source: Path, dest: Path) -> None:
     log_event("audio.converted", size_bytes=dest.stat().st_size, elapsed_sec=round(time.monotonic() - started, 1))
 
 
-def transcribe(wav_path: Path, terms: list[str], model_dir: Path, device: str = "cuda") -> tuple[list[dict], float]:
+def transcribe(
+    wav_path: Path,
+    terms: list[str],
+    model_dir: Path,
+    device: str = "cuda",
+    vad: bool = True,
+    vad_threshold: float | None = None,
+    vad_min_silence_ms: int | None = None,
+    context: bool = False,
+    model_name: str = WHISPER_MODEL,
+) -> tuple[list[dict], float]:
     from faster_whisper import WhisperModel
 
     started = time.monotonic()
     compute_type = "float16" if device == "cuda" else "int8"
-    model = WhisperModel(WHISPER_MODEL, device=device, compute_type=compute_type, download_root=str(model_dir / "whisper"))
-    log_event("whisper.model_loaded", model=WHISPER_MODEL, device=device, elapsed_sec=round(time.monotonic() - started, 1))
+    model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=str(model_dir / "whisper"))
+    log_event("whisper.model_loaded", model=model_name, device=device, elapsed_sec=round(time.monotonic() - started, 1))
+
+    vad_parameters = {}
+    if vad_threshold is not None:
+        vad_parameters["threshold"] = vad_threshold
+    if vad_min_silence_ms is not None:
+        vad_parameters["min_silence_duration_ms"] = vad_min_silence_ms
 
     started = time.monotonic()
     raw_segments, info = model.transcribe(
         str(wav_path),
         language=LANGUAGE,
         word_timestamps=True,
-        vad_filter=True,
-        condition_on_previous_text=False,
+        vad_filter=vad,
+        vad_parameters=vad_parameters or None,
+        # context: 前の文を手がかりにして固有名詞などを安定させる。繰り返しは下の閾値で抑える
+        condition_on_previous_text=context,
+        compression_ratio_threshold=2.4,
+        no_speech_threshold=0.6,
+        hallucination_silence_threshold=2.0,
         initial_prompt="、".join(terms) if terms else None,
     )
 
@@ -193,6 +229,63 @@ def _clean_word(word: dict) -> dict:
     return {"start": round(word["start"], 3), "end": round(word["end"], 3), "text": word["text"].strip()}
 
 
+def _word_speaker(word: dict, turns: list[dict]) -> str | None:
+    """単語の後半(中点から終端)で話者を決める。
+
+    Whisper は文頭の1文字の start を実際の発声より早く返し、直前の話者の区間に食い込むことがある。
+    後半だけを見れば、その影響を受けない。
+    """
+    midpoint = (word["start"] + word["end"]) / 2
+    return _speaker_for_range(midpoint, word["end"], turns)
+
+
+def _word_chars(words: list[dict]) -> int:
+    return sum(len(w["text"].strip()) for w in words)
+
+
+def _is_short_run(words: list[dict]) -> bool:
+    duration = words[-1]["end"] - words[0]["start"]
+    return duration < MIN_RUN_SEC and _word_chars(words) < MIN_RUN_CHARS
+
+
+def _split_runs(words: list[dict], turns: list[dict]) -> list[tuple[str | None, list[dict]]]:
+    runs: list[tuple[str | None, list[dict]]] = []
+    for word in words:
+        speaker = _word_speaker(word, turns)
+        if runs and runs[-1][0] == speaker:
+            runs[-1][1].append(word)
+        else:
+            runs.append((speaker, [word]))
+    return runs
+
+
+def _absorb_short_runs(runs: list[tuple[str | None, list[dict]]]) -> list[tuple[str | None, list[dict]]]:
+    """短い連続区間(相づちや境界のずれ)を、隣の長いほうの話者に吸収する。"""
+    while len(runs) > 1:
+        index = next((i for i, (_, words) in enumerate(runs) if _is_short_run(words)), None)
+        if index is None:
+            break
+        _, short_words = runs[index]
+        has_left, has_right = index > 0, index < len(runs) - 1
+        into_left = has_left and (not has_right or _word_chars(runs[index - 1][1]) >= _word_chars(runs[index + 1][1]))
+        if into_left:
+            speaker, words = runs[index - 1]
+            runs[index - 1] = (speaker, words + short_words)
+        else:
+            speaker, words = runs[index + 1]
+            runs[index + 1] = (speaker, short_words + words)
+        del runs[index]
+        # 吸収の結果、同じ話者が隣り合ったらつなぐ
+        coalesced: list[tuple[str | None, list[dict]]] = []
+        for speaker, words in runs:
+            if coalesced and coalesced[-1][0] == speaker:
+                coalesced[-1] = (speaker, coalesced[-1][1] + words)
+            else:
+                coalesced.append((speaker, words))
+        runs = coalesced
+    return runs
+
+
 def _build_segment(words: list[dict], speaker: str | None) -> dict:
     return {
         "start": round(words[0]["start"], 3),
@@ -203,44 +296,69 @@ def _build_segment(words: list[dict], speaker: str | None) -> dict:
     }
 
 
+def _can_join(previous: dict, current: dict) -> bool:
+    if previous["speaker"] != current["speaker"] or not previous["words"] or not current["words"]:
+        return False
+    if _word_chars(previous["words"]) + _word_chars(current["words"]) > MAX_UTTERANCE_CHARS:
+        return False
+    gap = current["words"][0]["start"] - previous["words"][-1]["end"]
+    if previous["speaker"] is None:
+        last_text = previous["words"][-1]["text"].strip()
+        return gap <= MAX_UNLABELED_JOIN_GAP_SEC and not last_text.endswith(SENTENCE_ENDINGS)
+    return gap <= MAX_JOIN_GAP_SEC
+
+
 def merge_speakers(segments: list[dict], turns: list[dict]) -> list[dict]:
-    """単語ごとに話者を割り当て、話者が変わる位置で区間を分割する。"""
-    merged: list[dict] = []
+    """単語ごとに話者を決め、短い断片をならしたうえで、同じ話者の続きを1つの発言にまとめる。"""
+    pieces: list[dict] = []
     for segment in segments:
         words = [w for w in segment["words"] if w["text"].strip()]
         if not words:
             text = segment["text"].strip()
             if text:
-                merged.append({
-                    "start": round(segment["start"], 3),
-                    "end": round(segment["end"], 3),
+                pieces.append({
+                    "start": segment["start"],
+                    "end": segment["end"],
                     "speaker": _speaker_for_range(segment["start"], segment["end"], turns),
                     "text": text,
                     "words": [],
                 })
             continue
+        for speaker, run_words in _absorb_short_runs(_split_runs(words, turns)):
+            pieces.append({"speaker": speaker, "words": run_words})
 
-        current: list[dict] = []
-        current_speaker = None
-        for word in words:
-            speaker = _speaker_for_range(word["start"], word["end"], turns)
-            if current and speaker != current_speaker:
-                merged.append(_build_segment(current, current_speaker))
-                current = []
-            current.append(word)
-            current_speaker = speaker
-        merged.append(_build_segment(current, current_speaker))
+    joined: list[dict] = []
+    for piece in pieces:
+        if joined and _can_join(joined[-1], piece):
+            joined[-1]["words"] = joined[-1]["words"] + piece["words"]
+        else:
+            joined.append(piece)
+
+    merged: list[dict] = []
+    for piece in joined:
+        if piece["words"]:
+            merged.append(_build_segment(piece["words"], piece["speaker"]))
+        else:
+            merged.append({
+                "start": round(piece["start"], 3),
+                "end": round(piece["end"], 3),
+                "speaker": piece["speaker"],
+                "text": piece["text"],
+                "words": [],
+            })
     return merged
 
 
-def build_result(segments: list[dict], duration_sec: float, diarization_enabled: bool) -> dict:
+def build_result(
+    segments: list[dict], duration_sec: float, diarization_enabled: bool, model_name: str = WHISPER_MODEL
+) -> dict:
     speakers = sorted({s["speaker"] for s in segments if s["speaker"] is not None})
     return {
         "version": RESULT_VERSION,
         "language": LANGUAGE,
         "duration_sec": round(duration_sec, 3),
         "model": {
-            "transcription": WHISPER_MODEL,
+            "transcription": model_name,
             "diarization": DIARIZATION_MODEL if diarization_enabled else None,
         },
         "speakers": speakers,
@@ -251,10 +369,19 @@ def build_result(segments: list[dict], duration_sec: float, diarization_enabled:
 def process_audio(audio_path: Path, work_dir: Path, options: dict, model_dir: Path, hf_token: str | None) -> dict:
     """音声ファイルから結果の JSON(dict)を作る。段階ごとに失敗理由を分類する。"""
     wav_path = work_dir / "audio.wav"
-    convert_to_wav(audio_path, wav_path)
+    convert_to_wav(audio_path, wav_path, normalize=bool(options.get("normalize", False)))
 
     try:
-        segments, duration_sec = transcribe(wav_path, options.get("terms") or [], model_dir)
+        segments, duration_sec = transcribe(
+            wav_path,
+            options.get("terms") or [],
+            model_dir,
+            vad=options.get("vad", True),
+            vad_threshold=options.get("vad_threshold"),
+            vad_min_silence_ms=options.get("vad_min_silence_ms"),
+            context=bool(options.get("context", False)),
+            model_name=options.get("model") or WHISPER_MODEL,
+        )
     except PipelineError:
         raise
     except Exception as err:
@@ -274,7 +401,9 @@ def process_audio(audio_path: Path, work_dir: Path, options: dict, model_dir: Pa
             logger.exception("diarization failed")
             raise PipelineError(_classify_gpu_error(err, "diarization_failed")) from err
 
-    return build_result(merge_speakers(segments, turns), duration_sec, diarization_enabled)
+    return build_result(
+        merge_speakers(segments, turns), duration_sec, diarization_enabled, options.get("model") or WHISPER_MODEL
+    )
 
 
 def _classify_gpu_error(err: Exception, default_code: str) -> str:

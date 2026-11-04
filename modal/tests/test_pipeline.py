@@ -85,6 +85,81 @@ class TestMergeSpeakers:
         assert [w["text"] for w in merged[0]["words"]] == ["Hello", "world"]
 
 
+class TestMergeSpeakersSmoothing:
+    def test_first_character_leaking_into_the_previous_speaker_is_absorbed(self):
+        turns = [
+            {"start": 0, "end": 31.3, "speaker": "SPEAKER_00"},
+            {"start": 31.3, "end": 40, "speaker": "SPEAKER_01"},
+        ]
+        words = [word(31.0, 31.24, "多"), word(31.24, 33.0, "分夏休みは"), word(33.0, 34.0, "終わった後")]
+        merged = pipeline.merge_speakers([segment(words)], turns)
+        assert [(s["speaker"], s["text"]) for s in merged] == [("SPEAKER_01", "多分夏休みは終わった後")]
+
+    def test_a_short_backchannel_inside_a_sentence_is_absorbed(self):
+        turns = [
+            {"start": 0, "end": 3, "speaker": "SPEAKER_00"},
+            {"start": 3, "end": 3.4, "speaker": "SPEAKER_01"},
+            {"start": 3.4, "end": 7, "speaker": "SPEAKER_00"},
+        ]
+        words = [word(0, 3, "それでですね今日は"), word(3, 3.4, "うん"), word(3.4, 7, "天気がよかったです")]
+        merged = pipeline.merge_speakers([segment(words)], turns)
+        assert [(s["speaker"], s["text"]) for s in merged] == [("SPEAKER_00", "それでですね今日はうん天気がよかったです")]
+
+    def test_long_runs_still_split(self):
+        turns = [
+            {"start": 0, "end": 3, "speaker": "SPEAKER_00"},
+            {"start": 3, "end": 6, "speaker": "SPEAKER_01"},
+        ]
+        words = [word(0, 3, "こんにちは今日は"), word(3, 6, "はいよろしくお願いします")]
+        merged = pipeline.merge_speakers([segment(words)], turns)
+        assert [s["speaker"] for s in merged] == ["SPEAKER_00", "SPEAKER_01"]
+
+    def test_consecutive_segments_of_one_speaker_are_joined(self):
+        turns = [{"start": 0, "end": 20, "speaker": "SPEAKER_00"}]
+        segments = [
+            segment([word(0, 2, "最初の文です")]),
+            segment([word(3, 5, "続きの文です")]),
+            segment([word(10, 12, "離れた文です")]),
+        ]
+        merged = pipeline.merge_speakers(segments, turns)
+        assert [(s["text"], s["start"], s["end"]) for s in merged] == [
+            ("最初の文です続きの文です", 0, 5),
+            ("離れた文です", 10, 12),
+        ]
+
+    def test_contiguous_segments_without_a_speaker_are_joined(self):
+        segments = [segment([word(0, 1, "もう保護者だね")]), segment([word(1.0, 2, "なんかジン君")])]
+        merged = pipeline.merge_speakers(segments, [])
+        assert [(s["speaker"], s["text"], s["start"], s["end"]) for s in merged] == [
+            (None, "もう保護者だねなんかジン君", 0, 2),
+        ]
+
+    def test_segments_without_a_speaker_stay_apart_after_a_pause(self):
+        segments = [segment([word(0, 1, "はい")]), segment([word(1.6, 2, "どうぞ")])]
+        assert len(pipeline.merge_speakers(segments, [])) == 2
+
+    @pytest.mark.parametrize("ending", ["。", "?", "？", "!"])
+    def test_segments_without_a_speaker_stay_apart_after_a_sentence_end(self, ending):
+        segments = [segment([word(0, 1, f"いるんだろ{ending}")]), segment([word(1.0, 2, "いやマジで")])]
+        assert len(pipeline.merge_speakers(segments, [])) == 2
+
+    def test_segments_without_a_speaker_have_a_length_limit(self):
+        long_text = "あ" * 150
+        segments = [segment([word(0, 2, long_text)]), segment([word(2, 4, long_text)])]
+        assert len(pipeline.merge_speakers(segments, [])) == 2
+
+    def test_a_segment_without_words_is_not_joined(self):
+        segments = [segment([word(0, 1, "はい")]), segment([], text="本文")]
+        segments[1]["start"], segments[1]["end"] = 1.0, 2.0
+        assert [s["text"] for s in pipeline.merge_speakers(segments, [])] == ["はい", "本文"]
+
+    def test_joined_utterances_have_a_length_limit(self):
+        turns = [{"start": 0, "end": 100, "speaker": "SPEAKER_00"}]
+        long_text = "あ" * 150
+        segments = [segment([word(0, 2, long_text)]), segment([word(2, 4, long_text)])]
+        assert len(pipeline.merge_speakers(segments, turns)) == 2
+
+
 class TestBuildResult:
     def test_diarization_on(self):
         result = pipeline.build_result(

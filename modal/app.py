@@ -117,7 +117,8 @@ def transcribe_file(remote_name: str, options: dict) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         result = pipeline.process_audio(CLI_INPUT_DIR / remote_name, Path(tmp), options, MODEL_DIR, os.environ.get("HF_TOKEN"))
     commit_model_cache()
-    return result
+    # numpy の数値型が混ざっていると、numpy の無いローカルで pickle を復元できない
+    return json.loads(json.dumps(result))
 
 
 @app.local_entrypoint()
@@ -128,6 +129,12 @@ def main(
     min_speakers: int = 0,
     max_speakers: int = 0,
     terms: str = "",
+    vad: bool = True,
+    vad_threshold: float = 0.0,
+    vad_min_silence_ms: int = 0,
+    context: bool = False,
+    normalize: bool = False,
+    model: str = "",
 ):
     local_path = Path(input)
     remote_name = f"{int(time.time())}-{local_path.name}"
@@ -137,6 +144,12 @@ def main(
 
     options = {
         "diarization": diarization,
+        "vad": vad,
+        "vad_threshold": vad_threshold or None,
+        "vad_min_silence_ms": vad_min_silence_ms or None,
+        "context": context,
+        "normalize": normalize,
+        "model": model or None,
         "min_speakers": min_speakers or None,
         "max_speakers": max_speakers or None,
         "terms": [t.strip() for t in terms.split(",") if t.strip()],
