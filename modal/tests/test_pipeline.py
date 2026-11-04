@@ -105,6 +105,35 @@ class TestMergeSpeakersSmoothing:
         merged = pipeline.merge_speakers([segment(words)], turns)
         assert [(s["speaker"], s["text"]) for s in merged] == [("SPEAKER_00", "それでですね今日はうん天気がよかったです")]
 
+    def test_a_character_with_a_stretched_time_is_absorbed(self):
+        turns = [
+            {"start": 18, "end": 21.4, "speaker": "SPEAKER_00"},
+            {"start": 22.5, "end": 22.8, "speaker": "SPEAKER_01"},
+            {"start": 23.6, "end": 25.3, "speaker": "SPEAKER_00"},
+        ]
+        words = [word(18, 21.4, "心理ゼミの"), word(21.4, 23.5, "コ"), word(23.7, 25.2, "アメンバーになってました")]
+        merged = pipeline.merge_speakers([segment(words)], turns)
+        assert [(s["speaker"], s["text"]) for s in merged] == [("SPEAKER_00", "心理ゼミのコアメンバーになってました")]
+
+    def test_a_short_piece_cut_inside_a_word_is_absorbed(self):
+        turns = [
+            {"start": 145.8, "end": 149.8, "speaker": "SPEAKER_01"},
+            {"start": 149.8, "end": 152, "speaker": "SPEAKER_00"},
+        ]
+        words = [word(148.9, 149.2, "いや"), word(149.2, 149.7, "ちゃんと流"), word(149.8, 151.6, "してる感じが偉いな")]
+        merged = pipeline.merge_speakers([segment(words)], turns)
+        assert [(s["speaker"], s["text"]) for s in merged] == [("SPEAKER_00", "いやちゃんと流してる感じが偉いな")]
+
+    def test_a_real_change_inside_a_segment_is_kept(self):
+        turns = [
+            {"start": 13, "end": 16.2, "speaker": "SPEAKER_01"},
+            {"start": 16.5, "end": 19.5, "speaker": "SPEAKER_00"},
+        ]
+        first = [word(13 + i * 0.5, 13.5 + i * 0.5, "あ") for i in range(6)]
+        second = [word(16.5 + i * 0.5, 17 + i * 0.5, "い") for i in range(6)]
+        merged = pipeline.merge_speakers([segment(first + second)], turns)
+        assert [s["speaker"] for s in merged] == ["SPEAKER_01", "SPEAKER_00"]
+
     def test_long_runs_still_split(self):
         turns = [
             {"start": 0, "end": 3, "speaker": "SPEAKER_00"},
@@ -331,3 +360,21 @@ class TestConvert:
             pipeline.convert_to_wav(source, tmp_path / "out.wav")
         assert err.value.code == "audio_decode_failed"
         assert "audio.convert_failed" in caplog.text
+
+
+class TestProcessAudioDebug:
+    def run(self, monkeypatch, tmp_path, options):
+        whisper_segments = [segment([word(0, 1, "はい")])]
+        turns = [{"start": 0, "end": 1, "speaker": "SPEAKER_00"}]
+        monkeypatch.setattr(pipeline, "convert_to_wav", lambda *args, **kwargs: None)
+        monkeypatch.setattr(pipeline, "transcribe", lambda *args, **kwargs: (whisper_segments, 1.0))
+        monkeypatch.setattr(pipeline, "diarize", lambda *args, **kwargs: turns)
+        return pipeline.process_audio(tmp_path / "input", tmp_path, options, tmp_path, "token"), whisper_segments, turns
+
+    def test_result_has_no_debug_data_by_default(self, monkeypatch, tmp_path):
+        result, _, _ = self.run(monkeypatch, tmp_path, {})
+        assert "debug" not in result
+
+    def test_debug_option_adds_raw_segments_and_turns(self, monkeypatch, tmp_path):
+        result, whisper_segments, turns = self.run(monkeypatch, tmp_path, {"debug": True})
+        assert result["debug"] == {"whisper_segments": whisper_segments, "turns": turns}

@@ -135,6 +135,7 @@ def main(
     context: bool = False,
     normalize: bool = False,
     model: str = "",
+    debug: bool = False,
 ):
     local_path = Path(input)
     remote_name = f"{int(time.time())}-{local_path.name}"
@@ -150,6 +151,7 @@ def main(
         "context": context,
         "normalize": normalize,
         "model": model or None,
+        "debug": debug,
         "min_speakers": min_speakers or None,
         "max_speakers": max_speakers or None,
         "terms": [t.strip() for t in terms.split(",") if t.strip()],
@@ -160,6 +162,11 @@ def main(
     finally:
         cli_input_volume.remove_file(remote_name)
         print("removed the uploaded audio from the volume")
+    debug_data = result.pop("debug", None)
+    if debug_data is not None:
+        debug_path = Path(output).with_suffix(".debug.json")
+        debug_path.write_text(json.dumps(debug_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"wrote {debug_path}: {len(debug_data['turns'])} turns")
     Path(output).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     elapsed = time.monotonic() - started
     print(f"wrote {output}: {result['duration_sec']:.0f}s of audio, {len(result['segments'])} segments, {elapsed:.0f}s elapsed")

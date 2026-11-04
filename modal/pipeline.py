@@ -26,9 +26,10 @@ CALLBACK_TIMEOUT_SEC = (10, 60)
 CALLBACK_MAX_ATTEMPTS = 6
 PROGRESS_INTERVAL_SEC = 300.0
 
-# 話者の割り当て: これより短く、かつ文字数が少ない連続区間は、隣の話者に吸収する
+# 話者の割り当て: 発話の長さがこれより短い連続区間は、隣の話者に吸収する
 MIN_RUN_SEC = 1.0
-MIN_RUN_CHARS = 6
+# Whisper は無音まで含めて1文字の時刻を伸ばすことがあるため、1文字をこの長さまでしか数えない
+MAX_CHAR_SEC = 0.5
 # 同じ話者の隣り合う区間を、この間隔以内かつこの文字数以内なら1つの発言にまとめる
 MAX_JOIN_GAP_SEC = 1.5
 MAX_UTTERANCE_CHARS = 200
@@ -244,8 +245,8 @@ def _word_chars(words: list[dict]) -> int:
 
 
 def _is_short_run(words: list[dict]) -> bool:
-    duration = words[-1]["end"] - words[0]["start"]
-    return duration < MIN_RUN_SEC and _word_chars(words) < MIN_RUN_CHARS
+    spoken = sum(min(w["end"] - w["start"], MAX_CHAR_SEC * len(w["text"].strip())) for w in words)
+    return spoken < MIN_RUN_SEC
 
 
 def _split_runs(words: list[dict], turns: list[dict]) -> list[tuple[str | None, list[dict]]]:
@@ -401,9 +402,12 @@ def process_audio(audio_path: Path, work_dir: Path, options: dict, model_dir: Pa
             logger.exception("diarization failed")
             raise PipelineError(_classify_gpu_error(err, "diarization_failed")) from err
 
-    return build_result(
+    result = build_result(
         merge_speakers(segments, turns), duration_sec, diarization_enabled, options.get("model") or WHISPER_MODEL
     )
+    if options.get("debug"):
+        result["debug"] = {"whisper_segments": segments, "turns": turns}
+    return result
 
 
 def _classify_gpu_error(err: Exception, default_code: str) -> str:
