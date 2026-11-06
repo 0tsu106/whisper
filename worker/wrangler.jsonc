@@ -9,6 +9,13 @@
 	"observability": {
 		"enabled": true
 	},
+	"workers_dev": true,
+	"routes": [
+		{
+			"pattern": "whisper.taratara.org",
+			"custom_domain": true
+		}
+	],
 	"assets": {
 		"directory": "../frontend/dist",
 		"not_found_handling": "single-page-application",
@@ -39,7 +46,7 @@
 		}
 	],
 	"vars": {
-		"APP_URL": "https://whisper-transcriber.0tsu-notoin-google-sync.workers.dev",
+		"APP_URL": "https://whisper.taratara.org",
 		"R2_ACCOUNT_ID": "f0c340b62d1ad8dc8626d50c57b44f49",
 		"R2_BUCKET_NAME": "whisper-files",
 		"MODAL_ENDPOINT_URL": "https://tsu106--whisper-transcriber-start.us-east.modal.run",

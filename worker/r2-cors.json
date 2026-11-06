@@ -2,7 +2,10 @@
   "rules": [
     {
       "allowed": {
-        "origins": ["https://whisper-transcriber.0tsu-notoin-google-sync.workers.dev"],
+        "origins": [
+          "https://whisper.taratara.org",
+          "https://whisper-transcriber.0tsu-notoin-google-sync.workers.dev"
+        ],
         "methods": ["PUT"],
         "headers": ["Content-Type"]
       },
